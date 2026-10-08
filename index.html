@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pcap-graph — who talks to whom</title>
+<style>
+  :root, [data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0f1216; --panel: #171b21; --border: #2a3039; --fg: #e6e9ee; --muted: #8a93a1;
+    --accent: #58a6ff; --accent-bg: rgba(88,166,255,.08);
+    --warn: #f0b429; --warn-bg: rgba(240,180,41,.18); --error: #ff6b6b; --ok: #3fb950; --ok-bg: rgba(63,185,80,.18);
+    --c-private: #58a6ff; --c-public: #f78166; --c-bcast: #8a93a1; --c-v6: #a371f7; --c-arp: #3fb950;
+    --c-init: #2dd4bf;
+    --badge-fg: #fff; --sel-ring: #fff; --shadow: rgba(0,0,0,.4);
+  }
+  /* Light: warm beige/parchment. Node hues are deepened so they hold up on a pale ground. */
+  [data-theme="light"] {
+    color-scheme: light;
+    --bg: #f3ecdf; --panel: #ebe2d1; --border: #d3c6ae; --fg: #3a2f22; --muted: #857660;
+    --accent: #2f6fb3; --accent-bg: rgba(47,111,179,.10);
+    --warn: #a86a08; --warn-bg: rgba(168,106,8,.14); --error: #b23a3a; --ok: #3f7d45; --ok-bg: rgba(63,125,69,.14);
+    --c-private: #3b78c4; --c-public: #d4603b; --c-bcast: #9a8c74; --c-v6: #7d55b8; --c-arp: #4d8a4a;
+    --c-init: #1a8f80;
+    --badge-fg: #fff; --sel-ring: #3a2f22; --shadow: rgba(80,60,30,.25);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  body { display: grid; grid-template-rows: auto 1fr; grid-template-columns: 1fr 340px; height: 100vh; }
+  header { grid-column: 1 / -1; display: flex; gap: 12px; align-items: center; padding: 8px 14px;
+    border-bottom: 1px solid var(--border); background: var(--panel); flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0 12px 0 0; font-weight: 600; }
+  header label { color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+  header input[type=range] { width: 120px; }
+  header input[type=search] { background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 8px; width: 180px; }
+  button, .btn { background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  #stats { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #stage { position: relative; overflow: hidden; }
+  svg { width: 100%; height: 100%; display: block; cursor: grab; }
+  svg.panning { cursor: grabbing; }
+  #drop { position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
+    color: var(--muted); pointer-events: none; }
+  #drop.active { background: var(--accent-bg); outline: 2px dashed var(--accent); outline-offset: -12px; }
+  #drop .box { pointer-events: auto; max-width: 480px; padding: 32px; }
+  #drop h2 { color: var(--fg); margin: 0 0 8px; }
+  #drop input { display: none; }
+  #drop.hidden { display: none; }
+  aside { border-left: 1px solid var(--border); background: var(--panel); overflow: auto; padding: 12px 14px; }
+  aside h3 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  aside .sel { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15px; word-break: break-all; }
+  aside dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 10px 0; }
+  aside dt { color: var(--muted); } aside dd { margin: 0; font-variant-numeric: tabular-nums; }
+  aside table { width: 100%; border-collapse: collapse; margin: 6px 0 14px; font-size: 13px; }
+  aside td { padding: 3px 0; border-bottom: 1px solid var(--border); }
+  aside td:last-child { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  aside td.peer { cursor: pointer; color: var(--accent); font-family: ui-monospace, Menlo, monospace; }
+  aside td.peer:hover { text-decoration: underline; }
+  #legend { position: absolute; top: 12px; right: 12px; width: 400px; max-height: calc(100% - 24px); overflow: auto;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px 12px;
+    font-size: 13px; box-shadow: 0 8px 24px var(--shadow); z-index: 5; }
+  #legend[hidden] { display: none; }
+  #legend .lg-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  #legend .lg-head button { padding: 0 8px; font-size: 16px; line-height: 1.4; }
+  #legend h4 { margin: 12px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  #legend p { margin: 4px 0; color: var(--fg); line-height: 1.45; }
+  #legend .lg-row { display: grid; grid-template-columns: 64px 1fr; gap: 10px; align-items: center; margin: 5px 0; }
+  #legend .sw { width: 64px; height: 24px; display: block; overflow: visible; }
+  #legend .sw .node.sel circle { stroke: var(--sel-ring); stroke-width: 2.5px; }
+  #legendBtn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  .flag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 11px; margin-right: 4px; }
+  .flag.warn { background: var(--warn-bg); color: var(--warn); }
+  .flag.ok { background: var(--ok-bg); color: var(--ok); }
+  #err { color: var(--error); }
+  .node { cursor: pointer; }
+  .node text { font: 11px ui-monospace, Menlo, monospace; fill: var(--fg); pointer-events: none;
+    paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
+  .node text.deg { font: 700 10px system-ui, sans-serif; fill: var(--badge-fg); stroke: none; dominant-baseline: central; }
+  .node.dim { opacity: .18; }
+  .node.sel circle { stroke: var(--sel-ring); stroke-width: 2.5px; }
+  .link { fill: none; cursor: pointer; }
+  .link line { stroke-opacity: .75; }
+  .link .hit { stroke: transparent; stroke-opacity: 1; pointer-events: stroke; }
+  .link .from { stroke: var(--c-init); }
+  .link .to { stroke: var(--muted); marker-end: url(#arrow); }
+  .link:hover line, .link.sel line { stroke-opacity: 1; filter: brightness(1.4); }
+  .link.dim line { stroke-opacity: .06; }
+  .link.syn .from { stroke: var(--warn); stroke-dasharray: 4 3; }
+  .link.syn .to { stroke: var(--warn); stroke-dasharray: 4 3; marker-end: url(#arrow-warn); }
+  .link.bcast line { stroke-dasharray: 1 4; }
+  #arrow path { fill: var(--muted); } #arrow-warn path { fill: var(--warn); }
+  header select { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 3px 6px; }
+  #tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 4px; padding: 6px 8px; font-size: 12px; display: none; max-width: 320px; }
+  #tip b { font-family: ui-monospace, Menlo, monospace; }
+</style>
+<script>
+  // Apply saved/OS theme before first paint so there's no flash.
+  (() => {
+    const saved = localStorage.getItem("pcap-graph-theme");
+    const t = saved === "light" || saved === "dark" ? saved
+      : matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    document.documentElement.dataset.theme = t;
+  })();
+</script>
+</head>
+<body>
+<header>
+  <h1>pcap-graph</h1>
+  <label class="btn" for="file">Open capture…</label>
+  <input id="file" type="file" accept=".pcap,.pcapng,.cap" style="display:none">
+  <label><input type="checkbox" id="hideBcast" checked> hide broadcast/multicast</label>
+  <label><input type="checkbox" id="showL2"> include non-IP L2</label>
+  <label><input type="checkbox" id="labels" checked> labels</label>
+  <label>min packets <input type="range" id="minPk" min="0" max="10" value="0"> <span id="minPkV">1</span></label>
+  <label>size <select id="sizeBy"><option value="peers">peers</option><option value="packets">packets</option><option value="bytes">bytes</option></select></label>
+  <input type="search" id="q" placeholder="filter host / service">
+  <button id="fit">Fit</button>
+  <button id="exportCsv" disabled>CSV</button>
+  <button id="legendBtn" aria-pressed="false" aria-controls="legend">Legend</button>
+  <button id="themeBtn" title="Switch light / dark">☾ Dark</button>
+  <span id="stats"></span>
+</header>
+<div id="stage">
+  <svg id="svg"><defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="arrow-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs><g id="view"><g id="links"></g><g id="nodes"></g></g></svg>
+  <div id="drop"><div class="box">
+    <h2>Drop a Wireshark capture here</h2>
+    <p>.pcap or .pcapng. Everything is parsed locally in your browser — nothing is uploaded.</p>
+    <p><label class="btn" for="file">Choose file</label></p>
+    <p id="err"></p>
+  </div></div>
+  <div id="tip"></div>
+  <div id="legend" hidden></div>
+</div>
+<aside id="side"></aside>
+
+<script type="module">
+import { parseCapture, buildGraph, formatBytes } from "./pcap-graph.js";
+
+const $ = (s) => document.querySelector(s);
+const svg = $("#svg"), view = $("#view"), gLinks = $("#links"), gNodes = $("#nodes");
+const tip = $("#tip"), side = $("#side"), drop = $("#drop");
+const NS = "http://www.w3.org/2000/svg";
+
+let capture = null;     // { format, packets, dropped }
+let graph = null;       // { nodes, edges, stats }
+let sim = null;         // layout state
+let selected = null;    // { type: 'node'|'edge', id }
+let transform = { x: 0, y: 0, k: 1 };
+const positions = new Map(); // id -> {x,y,vx,vy,fixed}
+
+// ---------- file handling ----------
+$("#file").addEventListener("change", (e) => e.target.files[0] && load(e.target.files[0]));
+for (const ev of ["dragenter", "dragover"]) document.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("active"); });
+for (const ev of ["dragleave", "drop"]) document.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("active"); });
+document.addEventListener("drop", (e) => { const f = e.dataTransfer.files[0]; if (f) load(f); });
+
+async function load(file) {
+  $("#err").textContent = "";
+  try {
+    const buf = await file.arrayBuffer();
+    const t0 = performance.now();
+    capture = parseCapture(buf);
+    capture.name = file.name;
+    capture.parseMs = performance.now() - t0;
+    drop.classList.add("hidden");
+    $("#exportCsv").disabled = false;
+    rebuild(true);
+  } catch (err) {
+    drop.classList.remove("hidden");
+    $("#err").textContent = err.message;
+    console.error(err);
+  }
+}
+
+// ---------- graph build + filtering ----------
+function opts() {
+  return { hideBroadcast: $("#hideBcast").checked, collapseL2: !$("#showL2").checked };
+}
+
+function rebuild(resetLayout) {
+  if (!capture) return;
+  graph = buildGraph(capture.packets, opts());
+  const minPk = minPackets();
+  const q = $("#q").value.trim().toLowerCase();
+  const keepEdge = (e) => e.packets >= minPk &&
+    (!q || e.source.toLowerCase().includes(q) || e.target.toLowerCase().includes(q) ||
+      e.services.some((s) => s.name.toLowerCase().includes(q)));
+  graph.visEdges = graph.edges.filter(keepEdge);
+  const used = new Set();
+  for (const e of graph.visEdges) { used.add(e.source); used.add(e.target); }
+  graph.visNodes = graph.nodes.filter((n) => used.has(n.id));
+  graph.nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
+  graph.edgeById = new Map(graph.edges.map((e) => [e.id, e]));
+
+  const s = graph.stats;
+  $("#stats").textContent =
+    `${capture.name} · ${capture.format} · ${s.packets.toLocaleString()} pkts (${capture.dropped} undecoded) · ` +
+    `${graph.visNodes.length}/${s.hosts} hosts · ${graph.visEdges.length}/${s.conversations} conversations · ` +
+    `${formatBytes(s.totalBytes)} · ${s.duration.toFixed(1)}s · parsed in ${capture.parseMs.toFixed(0)} ms`;
+
+  render(resetLayout);
+  if (selected) showDetails(selected);
+}
+
+function minPackets() {
+  // log-ish slider: 1,2,3,5,10,20,50,100,200,500,1000
+  const steps = [1, 2, 3, 5, 10, 20, 50, 100, 200, 500, 1000];
+  return steps[+$("#minPk").value];
+}
+
+for (const id of ["#hideBcast", "#showL2"]) $(id).addEventListener("change", () => rebuild(true));
+$("#sizeBy").addEventListener("change", () => rebuild(false));
+$("#minPk").addEventListener("input", () => { $("#minPkV").textContent = minPackets(); rebuild(false); });
+$("#q").addEventListener("input", () => rebuild(false));
+$("#labels").addEventListener("change", () => gNodes.classList.toggle("nolabels", !$("#labels").checked));
+$("#fit").addEventListener("click", fit);
+$("#exportCsv").addEventListener("click", exportCsv);
+
+// ---------- rendering ----------
+const nodeEls = new Map(), linkEls = new Map(), radiusById = new Map();
+
+// Node radius: peers (distinct hosts talked to) by default — that's what makes a
+// host structurally important (DC, gateway, scanner). Packets/bytes = volume.
+function radius(n) {
+  switch ($("#sizeBy").value) {
+    case "packets": return 4 + Math.sqrt(n.packets) * 0.6;
+    case "bytes": return 4 + Math.sqrt(n.bytes / 64) * 0.6;
+    default: return 6 + Math.sqrt(n.peers) * 5;
+  }
+}
+function width(e) { return Math.max(0.8, Math.min(8, Math.log2(e.packets + 1) * 0.8)); }
+function color(n) {
+  if (n.broadcast) return "var(--c-bcast)";
+  if (n.l3 === "IPv6") return "var(--c-v6)";
+  if (n.l3 === "L2" || n.id.length === 17) return "var(--c-arp)";
+  return n.privateAddr ? "var(--c-private)" : "var(--c-public)";
+}
+
+function render(resetLayout) {
+  const W = svg.clientWidth, H = svg.clientHeight;
+  // keep positions for nodes already placed; seed new ones near center
+  for (const n of graph.visNodes) {
+    if (!positions.has(n.id) || resetLayout) {
+      const a = Math.random() * Math.PI * 2, r = Math.min(W, H) * 0.3 * Math.sqrt(Math.random());
+      positions.set(n.id, { x: W / 2 + Math.cos(a) * r, y: H / 2 + Math.sin(a) * r, vx: 0, vy: 0, fixed: false });
+    }
+  }
+  if (resetLayout) { transform = { x: 0, y: 0, k: 1 }; applyTransform(); }
+
+  gLinks.replaceChildren(); gNodes.replaceChildren(); nodeEls.clear(); linkEls.clear();
+
+  radiusById.clear();
+  for (const n of graph.visNodes) radiusById.set(n.id, radius(n));
+
+  for (const e of graph.visEdges) {
+    const g = document.createElementNS(NS, "g");
+    g.setAttribute("class", "link" + (e.synOnly ? " syn" : "") + (e.broadcast ? " bcast" : ""));
+    g.dataset.id = e.id;
+    // invisible fat line underneath = hit target; visible halves on top
+    const hit = document.createElementNS(NS, "line");
+    hit.setAttribute("class", "hit");
+    hit.setAttribute("stroke-width", Math.max(14, width(e) + 10));
+    // initiator half (teal) → midpoint → responder half (grey, arrowhead)
+    const from = document.createElementNS(NS, "line"), to = document.createElementNS(NS, "line");
+    from.setAttribute("class", "from"); to.setAttribute("class", "to");
+    const w = width(e);
+    from.setAttribute("stroke-width", w); to.setAttribute("stroke-width", w);
+    g.append(hit, from, to);
+    g.addEventListener("mousemove", (ev) => showTip(ev, edgeTip(e)));
+    g.addEventListener("mouseleave", hideTip);
+    gLinks.appendChild(g); linkEls.set(e.id, { g, hit, from, to });
+  }
+  for (const n of graph.visNodes) {
+    const g = document.createElementNS(NS, "g");
+    g.setAttribute("class", "node");
+    const r = radiusById.get(n.id);
+    const c = document.createElementNS(NS, "circle");
+    c.setAttribute("r", r); c.setAttribute("fill", color(n));
+    c.setAttribute("stroke", "var(--bg)"); c.setAttribute("stroke-width", "1.5");
+    const t = document.createElementNS(NS, "text");
+    t.setAttribute("dy", r + 11); t.setAttribute("text-anchor", "middle");
+    t.textContent = n.id;
+    g.append(c, t);
+    // peer count inside the circle; only when it fits
+    if (r >= 8) {
+      const d = document.createElementNS(NS, "text");
+      d.setAttribute("class", "deg"); d.setAttribute("text-anchor", "middle");
+      d.textContent = n.peers;
+      g.appendChild(d);
+    }
+    g.dataset.id = n.id;
+    g.addEventListener("mousemove", (ev) => showTip(ev, nodeTip(n)));
+    g.addEventListener("mouseleave", hideTip);
+    gNodes.appendChild(g); nodeEls.set(n.id, g);
+  }
+  startSim();
+  applySelectionClasses();
+}
+
+// ---------- force layout (Fruchterman-Reingold-ish with Barnes-Hut-free O(n²); fine to ~1500 nodes) ----------
+function startSim() {
+  if (sim) cancelAnimationFrame(sim.raf);
+  sim = { alpha: 1, raf: 0 };
+  const nodes = graph.visNodes, edges = graph.visEdges;
+  const W = svg.clientWidth, H = svg.clientHeight;
+  const pos = nodes.map((n) => positions.get(n.id));
+  const idx = new Map(nodes.map((n, i) => [n.id, i]));
+  const links = edges.map((e) => [idx.get(e.source), idx.get(e.target), e]);
+  const deg = new Float32Array(nodes.length);
+  for (const [a, b] of links) { deg[a]++; deg[b]++; }
+  // k = ideal edge length; repulsion is capped so tiny graphs don't explode
+  const k = Math.max(60, Math.min(220, Math.sqrt((W * H) / Math.max(1, nodes.length)) * 0.5));
+  const cutoff2 = (k * 3) ** 2;
+
+  const tick = () => {
+    const a = sim.alpha;
+    const maxStep = 4 + k * 0.25 * a; // FR "temperature"
+    // repulsion
+    for (let i = 0; i < pos.length; i++) {
+      const p = pos[i];
+      for (let j = i + 1; j < pos.length; j++) {
+        const q = pos[j];
+        let dx = p.x - q.x, dy = p.y - q.y;
+        let d2 = dx * dx + dy * dy;
+        if (d2 > cutoff2) continue;
+        if (d2 < 1) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 1; }
+        const d = Math.sqrt(d2);
+        const f = Math.min(k, (k * k) / d) / d * 0.1;
+        const fx = dx * f, fy = dy * f;
+        p.vx += fx; p.vy += fy; q.vx -= fx; q.vy -= fy;
+      }
+    }
+    // attraction along edges (busier conversations sit closer)
+    for (const [i, j, e] of links) {
+      const p = pos[i], q = pos[j];
+      const dx = q.x - p.x, dy = q.y - p.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const target = k * (1.2 - Math.min(0.6, Math.log2(e.packets + 1) / 20));
+      const f = ((d - target) / d) * 0.1;
+      // hubs move less so stars stay stable
+      const wp = 1 / Math.sqrt(deg[i]), wq = 1 / Math.sqrt(deg[j]);
+      p.vx += dx * f * wp; p.vy += dy * f * wp;
+      q.vx -= dx * f * wq; q.vy -= dy * f * wq;
+    }
+    // gravity + integrate with capped displacement
+    for (const p of pos) {
+      p.vx += (W / 2 - p.x) * 0.01; p.vy += (H / 2 - p.y) * 0.01;
+      const v = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+      const s = v > maxStep ? maxStep / v : 1;
+      if (!p.fixed) { p.x += p.vx * s; p.y += p.vy * s; }
+      p.vx *= 0.4; p.vy *= 0.4;
+    }
+    draw();
+    sim.alpha *= 0.98;
+    if (sim.alpha > 0.01) sim.raf = requestAnimationFrame(tick);
+  };
+  sim.raf = requestAnimationFrame(tick);
+}
+
+function reheat(alpha = 0.3) { if (sim) { sim.alpha = Math.max(sim.alpha, alpha); if (sim.alpha <= 0.0105) startSim(); } }
+
+function draw() {
+  for (const e of graph.visEdges) {
+    const { hit, from, to } = linkEls.get(e.id);
+    const ini = positions.get(e.initiator), res = positions.get(e.responder);
+    const ri = radiusById.get(e.initiator), rr = radiusById.get(e.responder);
+    const dx = res.x - ini.x, dy = res.y - ini.y;
+    const d = Math.sqrt(dx * dx + dy * dy) || 1;
+    const ux = dx / d, uy = dy / d;
+    // trim to node rims so the arrowhead lands on the responder's circle
+    const sx = ini.x + ux * ri, sy = ini.y + uy * ri;
+    const ex = res.x - ux * (rr + 1), ey = res.y - uy * (rr + 1);
+    const mx = (sx + ex) / 2, my = (sy + ey) / 2;
+    hit.setAttribute("x1", sx); hit.setAttribute("y1", sy); hit.setAttribute("x2", ex); hit.setAttribute("y2", ey);
+    from.setAttribute("x1", sx); from.setAttribute("y1", sy); from.setAttribute("x2", mx); from.setAttribute("y2", my);
+    to.setAttribute("x1", mx); to.setAttribute("y1", my); to.setAttribute("x2", ex); to.setAttribute("y2", ey);
+  }
+  for (const n of graph.visNodes) {
+    const p = positions.get(n.id);
+    nodeEls.get(n.id).setAttribute("transform", `translate(${p.x},${p.y})`);
+  }
+}
+
+// ---------- pan / zoom / drag ----------
+function applyTransform() { view.setAttribute("transform", `translate(${transform.x},${transform.y}) scale(${transform.k})`); }
+function toWorld(ev) {
+  const r = svg.getBoundingClientRect();
+  return { x: (ev.clientX - r.left - transform.x) / transform.k, y: (ev.clientY - r.top - transform.y) / transform.k };
+}
+svg.addEventListener("wheel", (ev) => {
+  ev.preventDefault();
+  const r = svg.getBoundingClientRect();
+  const mx = ev.clientX - r.left, my = ev.clientY - r.top;
+  const f = Math.exp(-ev.deltaY * 0.0015);
+  const k = Math.min(8, Math.max(0.1, transform.k * f));
+  transform.x = mx - (mx - transform.x) * (k / transform.k);
+  transform.y = my - (my - transform.y) * (k / transform.k);
+  transform.k = k; applyTransform();
+}, { passive: false });
+
+// Selection is decided on pointerup, not click: setPointerCapture on the svg
+// would otherwise retarget the click event to the svg and deselect everything.
+// A press that moves < DRAG_PX is a click; more is a drag/pan.
+const DRAG_PX = 4;
+let pan = null, drag = null;
+svg.addEventListener("pointerdown", (ev) => {
+  if (ev.button !== 0) return;
+  const hit = ev.target.closest(".node, .link");
+  if (hit?.classList.contains("node")) {
+    drag = { id: hit.dataset.id, x0: ev.clientX, y0: ev.clientY, moved: false };
+    positions.get(drag.id).fixed = true;
+  } else {
+    pan = { x: ev.clientX - transform.x, y: ev.clientY - transform.y, x0: ev.clientX, y0: ev.clientY, moved: false, edge: hit?.dataset.id ?? null };
+  }
+  svg.setPointerCapture(ev.pointerId);
+});
+svg.addEventListener("pointermove", (ev) => {
+  if (pan) {
+    if (!pan.moved && Math.hypot(ev.clientX - pan.x0, ev.clientY - pan.y0) < DRAG_PX) return;
+    pan.moved = true; svg.classList.add("panning");
+    transform.x = ev.clientX - pan.x; transform.y = ev.clientY - pan.y; applyTransform();
+  }
+  if (drag) {
+    if (!drag.moved && Math.hypot(ev.clientX - drag.x0, ev.clientY - drag.y0) < DRAG_PX) return;
+    drag.moved = true;
+    const p = positions.get(drag.id), w = toWorld(ev);
+    p.x = w.x; p.y = w.y; p.vx = p.vy = 0; reheat(0.15); draw();
+  }
+});
+svg.addEventListener("pointerup", (ev) => {
+  if (pan) {
+    svg.classList.remove("panning");
+    if (!pan.moved) select(pan.edge ? { type: "edge", id: pan.edge } : null);
+    pan = null;
+  }
+  if (drag) {
+    const p = positions.get(drag.id);
+    if (drag.moved) p.fixed = true; // dragged nodes stay pinned
+    else { p.fixed = false; select({ type: "node", id: drag.id }); }
+    drag = null;
+  }
+});
+svg.addEventListener("pointercancel", () => { pan = null; drag = null; svg.classList.remove("panning"); });
+function fit() {
+  if (!graph || !graph.visNodes.length) return;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const n of graph.visNodes) { const p = positions.get(n.id); x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+  const W = svg.clientWidth, H = svg.clientHeight, pad = 60;
+  const k = Math.min(8, Math.max(0.1, Math.min((W - pad * 2) / Math.max(1, x1 - x0), (H - pad * 2) / Math.max(1, y1 - y0))));
+  transform = { k, x: W / 2 - k * (x0 + x1) / 2, y: H / 2 - k * (y0 + y1) / 2 }; applyTransform();
+}
+
+// ---------- selection & details ----------
+function select(sel) { selected = sel; applySelectionClasses(); showDetails(sel); }
+
+function applySelectionClasses() {
+  const hl = new Set();
+  if (selected?.type === "node") {
+    hl.add(selected.id);
+    for (const e of graph.visEdges) if (e.source === selected.id || e.target === selected.id) { hl.add(e.source); hl.add(e.target); }
+  } else if (selected?.type === "edge") {
+    const e = graph.edgeById.get(selected.id); if (e) { hl.add(e.source); hl.add(e.target); }
+  }
+  for (const [id, g] of nodeEls) {
+    g.classList.toggle("dim", selected && !hl.has(id));
+    g.classList.toggle("sel", selected?.type === "node" && selected.id === id);
+  }
+  for (const [id, { g }] of linkEls) {
+    const e = graph.edgeById.get(id);
+    const on = selected?.type === "edge" ? id === selected.id : selected ? hl.has(e.source) && hl.has(e.target) && (e.source === selected.id || e.target === selected.id) : true;
+    g.classList.toggle("dim", selected && !on);
+    g.classList.toggle("sel", selected?.type === "edge" && id === selected.id);
+  }
+}
+
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const tsFmt = (t) => t ? new Date(t * 1000).toISOString().replace("T", " ").slice(0, 19) + "Z" : "–";
+
+function showDetails(sel) {
+  if (!sel) {
+    side.innerHTML = `<h3>Details</h3><p style="color:var(--muted)">Click a host or a line between hosts.<br>Not sure what a colour or line means? Open the <b>Legend</b> (top right).</p>`;
+    return;
+  }
+  if (sel.type === "node") {
+    const n = graph.nodeById.get(sel.id); if (!n) return select(null);
+    const peers = graph.edges.filter((e) => e.source === n.id || e.target === n.id)
+      .map((e) => ({ peer: e.source === n.id ? e.target : e.source, e })).sort((a, b) => b.e.packets - a.e.packets);
+    side.innerHTML = `
+      <h3>Host</h3><div class="sel">${esc(n.id)}</div>
+      <div style="margin:6px 0">${n.broadcast ? `<span class="flag">broadcast/multicast</span>` : ""}
+        ${n.l3 === "IPv4" && !n.privateAddr && !n.broadcast ? `<span class="flag warn">public</span>` : ""}
+        ${n.services.length ? `<span class="flag ok">serves ${esc(n.services.map((s) => s.name).slice(0, 4).join(", "))}</span>` : ""}</div>
+      <dl><dt>Packets</dt><dd>${n.packets.toLocaleString()} (${n.sent.toLocaleString()} out / ${n.received.toLocaleString()} in)</dd>
+        <dt>Bytes</dt><dd>${formatBytes(n.bytes)}</dd>
+        <dt>Peers</dt><dd>${n.peers} <span style="color:var(--muted)">(opened ${n.initiated}, answered ${n.responded})</span></dd>
+        <dt>MAC</dt><dd>${n.macs.length ? n.macs.map(esc).join("<br>") : "–"}</dd>
+        <dt>First</dt><dd>${tsFmt(n.firstSeen)}</dd><dt>Last</dt><dd>${tsFmt(n.lastSeen)}</dd></dl>
+      ${n.services.length ? `<h3>Services offered</h3><table>${n.services.map((s) => `<tr><td>${esc(s.name)}</td><td>${s.count}</td></tr>`).join("")}</table>` : ""}
+      <h3>Talks to (${peers.length})</h3>
+      <table>${peers.map(({ peer, e }) => `<tr><td style="color:${e.initiator === n.id ? "var(--c-init)" : "var(--muted)"}" title="${e.initiator === n.id ? "this host opened it" : "peer opened it"}">${e.initiator === n.id ? "→" : "←"}</td>
+        <td class="peer" data-id="${esc(peer)}">${esc(peer)}</td>
+        <td>${esc(e.services.slice(0, 2).map((s) => s.name).join(", "))}</td><td>${e.packets}</td></tr>`).join("")}</table>`;
+  } else {
+    const e = graph.edgeById.get(sel.id); if (!e) return select(null);
+    const fwd = e.initiator === e.source;
+    const fromIni = fwd ? e.ab : e.ba, fromRes = fwd ? e.ba : e.ab;
+    side.innerHTML = `
+      <h3>Conversation</h3>
+      <div class="sel"><span class="peer" data-id="${esc(e.initiator)}" style="cursor:pointer;color:var(--c-init)">${esc(e.initiator)}</span><br>↓<br>
+        <span class="peer" data-id="${esc(e.responder)}" style="cursor:pointer;color:var(--accent)">${esc(e.responder)}</span></div>
+      <div style="margin:6px 0">${e.synOnly ? `<span class="flag warn">SYN only, no reply (${e.synOnly})</span>` : ""}
+        ${fromIni && fromRes ? `<span class="flag ok">bidirectional</span>` : `<span class="flag">one-way</span>`}
+        <span class="flag">opened by: ${esc(e.initiatorEvidence)}</span></div>
+      <dl><dt>Opened by</dt><dd style="color:var(--c-init)">${esc(e.initiator)}</dd>
+        <dt>Answered by</dt><dd>${esc(e.responder)}</dd>
+        <dt>Packets</dt><dd>${e.packets.toLocaleString()}</dd>
+        <dt>→</dt><dd>${fromIni.toLocaleString()} from initiator</dd>
+        <dt>←</dt><dd>${fromRes.toLocaleString()} from responder</dd>
+        <dt>Bytes</dt><dd>${formatBytes(e.bytes)}</dd>
+        <dt>First</dt><dd>${tsFmt(e.firstSeen)}</dd><dt>Last</dt><dd>${tsFmt(e.lastSeen)}</dd></dl>
+      ${e.initiatorEvidence === "first packet" ? `<p style="color:var(--muted);font-size:12px">No TCP handshake seen — direction is inferred from the first packet in the capture, which is unreliable if the capture started mid-conversation.</p>` : ""}
+      <h3>Services / ports</h3><table>${e.services.map((s) => `<tr><td>${esc(s.name)}</td><td>${s.count}</td></tr>`).join("")}</table>
+      <h3>Protocols</h3><table>${e.protocols.map((s) => `<tr><td>${esc(s.name)}</td><td>${s.count}</td></tr>`).join("")}</table>`;
+  }
+  side.querySelectorAll(".peer").forEach((td) => td.addEventListener("click", () => {
+    const id = td.dataset.id; if (graph.nodeById.has(id)) select({ type: "node", id });
+  }));
+}
+
+// ---------- legend ----------
+// Swatches are real SVG using the same classes/markers as the graph, so the
+// legend can't drift from what's actually drawn.
+const legendPanel = $("#legend"), legendBtn = $("#legendBtn");
+function swatchNode(cls, fill, badge) {
+  return `<svg viewBox="0 0 36 24" class="sw"><g class="node ${cls}"><circle cx="18" cy="12" r="${badge ? 10 : 7}" fill="${fill}" stroke="var(--bg)" stroke-width="1.5"/>${badge ? `<text class="deg" x="18" y="12" text-anchor="middle">${badge}</text>` : ""}</g></svg>`;
+}
+function swatchEdge(cls) {
+  return `<svg viewBox="0 0 64 24" class="sw"><g class="link ${cls}">
+    <line class="from" x1="4" y1="12" x2="30" y2="12" stroke-width="2.5"/>
+    <line class="to" x1="30" y1="12" x2="56" y2="12" stroke-width="2.5"/></g></svg>`;
+}
+legendPanel.innerHTML = `
+  <div class="lg-head"><b>Legend</b><button id="legendClose" aria-label="Close legend">×</button></div>
+  <h4>Hosts (nodes)</h4>
+  <div class="lg-row">${swatchNode("", "var(--c-private)")}<span>Private IPv4 (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16)</span></div>
+  <div class="lg-row">${swatchNode("", "var(--c-public)")}<span>Public / internet IPv4</span></div>
+  <div class="lg-row">${swatchNode("", "var(--c-v6)")}<span>IPv6</span></div>
+  <div class="lg-row">${swatchNode("", "var(--c-bcast)")}<span>Broadcast or multicast destination (not a real host)</span></div>
+  <div class="lg-row">${swatchNode("", "var(--c-arp)")}<span>MAC address only — ARP probe or non-IP frame (LLDP, STP…)</span></div>
+  <div class="lg-row">${swatchNode("", "var(--c-private)", "4")}<span><b>Number</b> = distinct hosts this one talked to. <b>Size</b> follows the <i>size</i> selector (peers by default; packets or bytes).</span></div>
+  <div class="lg-row">${swatchNode("sel", "var(--c-private)")}<span>Bold ring = selected. Others fade so its connections stand out.</span></div>
+  <h4>Conversations (lines)</h4>
+  <div class="lg-row">${swatchEdge("")}<span><b style="color:var(--c-init)">Teal half</b> starts at the host that <b>opened</b> the conversation; <b style="color:var(--muted)">grey half + arrow</b> points at the host that <b>answered</b>.</span></div>
+  <div class="lg-row">${swatchEdge("syn")}<span><b style="color:var(--warn)">Dashed amber</b> = TCP SYNs with no reply at all — port-scan signature.</span></div>
+  <div class="lg-row">${swatchEdge("bcast")}<span>Dotted = traffic to a broadcast/multicast address (hidden by default).</span></div>
+  <div class="lg-row"><svg viewBox="0 0 64 24" class="sw"><line x1="2" y1="12" x2="60" y2="12" stroke="var(--muted)" stroke-width="1"/><line x1="2" y1="19" x2="60" y2="19" stroke="var(--muted)" stroke-width="6"/></svg><span><b>Thickness</b> ∝ log(packets). Thin = a few packets, thick = thousands.</span></div>
+  <h4>How "who opened it" is decided</h4>
+  <p><b>TCP SYN</b> seen → that sender opened it (reliable).<br>
+     No handshake (UDP, ICMP, ARP, or the capture started mid-stream) → the <b>first packet</b> seen decides; the details panel flags this as weaker evidence.</p>
+  <h4>Interaction</h4>
+  <p>Click a host or line → details on the right. Lines have a wide hit zone; aim roughly.<br>
+     Drag a host → moves and pins it. Drag empty space → pan. Scroll → zoom. <b>Fit</b> → recentre.</p>`;
+function toggleLegend(show = legendPanel.hidden) {
+  legendPanel.hidden = !show;
+  legendBtn.setAttribute("aria-pressed", String(show));
+}
+legendBtn.addEventListener("click", () => toggleLegend());
+$("#legendClose").addEventListener("click", () => toggleLegend(false));
+document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !legendPanel.hidden) toggleLegend(false); });
+
+// ---------- theme ----------
+const themeBtn = $("#themeBtn");
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  localStorage.setItem("pcap-graph-theme", t);
+  // label shows the *current* mode; clicking flips it
+  themeBtn.textContent = t === "light" ? "☀ Light" : "☾ Dark";
+  themeBtn.setAttribute("aria-label", `Theme: ${t}. Switch to ${t === "light" ? "dark" : "light"}`);
+}
+applyTheme(document.documentElement.dataset.theme);
+themeBtn.addEventListener("click", () => applyTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light"));
+
+showDetails(null);
+
+function nodeTip(n) {
+  return `<b>${esc(n.id)}</b><br>${n.packets} pkts · ${formatBytes(n.bytes)} · ${n.peers} peers (opened ${n.initiated}, answered ${n.responded})` +
+    (n.services.length ? `<br>${esc(n.services.slice(0, 3).map((s) => s.name).join(", "))}` : "");
+}
+function edgeTip(e) {
+  const fwd = e.initiator === e.source;
+  return `<b>${esc(e.initiator)}</b> → <b>${esc(e.responder)}</b> <span style="color:var(--muted)">(opened by ${e.initiatorEvidence})</span>` +
+    `<br>${e.packets} pkts (${fwd ? e.ab : e.ba} → / ← ${fwd ? e.ba : e.ab}) · ${formatBytes(e.bytes)}` +
+    `<br>${esc(e.services.slice(0, 3).map((s) => `${s.name} ${s.count}`).join(", "))}`;
+}
+function showTip(ev, html) {
+  const r = $("#stage").getBoundingClientRect();
+  tip.innerHTML = html; tip.style.display = "block";
+  tip.style.left = `${ev.clientX - r.left + 14}px`; tip.style.top = `${ev.clientY - r.top + 14}px`;
+}
+function hideTip() { tip.style.display = "none"; }
+
+// ---------- export ----------
+function exportCsv() {
+  const rows = [["initiator", "responder", "initiator_evidence", "packets", "from_initiator", "from_responder", "bytes", "services", "protocols", "syn_only", "first", "last"]];
+  for (const e of graph.edges) {
+    const fwd = e.initiator === e.source;
+    rows.push([e.initiator, e.responder, e.initiatorEvidence, e.packets, fwd ? e.ab : e.ba, fwd ? e.ba : e.ab, e.bytes,
+      e.services.map((s) => `${s.name}:${s.count}`).join(";"), e.protocols.map((s) => `${s.name}:${s.count}`).join(";"),
+      e.synOnly, tsFmt(e.firstSeen), tsFmt(e.lastSeen)]);
+  }
+  const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = (capture.name.replace(/\.[^.]+$/, "") || "capture") + "-conversations.csv";
+  a.click(); URL.revokeObjectURL(a.href);
+}
+
+// label toggle via CSS
+const style = document.createElement("style");
+style.textContent = ".nolabels text{display:none}";
+document.head.appendChild(style);
+
+window.addEventListener("resize", () => graph && draw());
+// expose for debugging / automation
+window.pcapGraph = { load, get graph() { return graph; }, get capture() { return capture; }, select, fit };
+</script>
+</body>
+</html>
